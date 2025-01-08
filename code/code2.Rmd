@@ -1,0 +1,1237 @@
+---
+title: "MCD vs MCR reimbursement"
+author: "Justin"
+date: "2024-09-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(readxl)
+library(tidygeocoder)
+library(tidyverse)
+library(usmap)
+library(stargazer)
+library(lme4)
+library(ggpattern)
+library(gtsummary)
+library(ivreg)
+
+
+`%notin%` <- Negate(`%in%`)
+select <- dplyr::select
+```
+
+
+
+## Formating plots
+
+```{r, echo = FALSE, results = "asis", message=FALSE, warning = FALSE, fig.align="center"}
+
+is.extrafont.installed <- function(){
+  if(is.element("extrafont", installed.packages()[,1])){
+    library(extrafont)
+    # probably need something here to run font_import()
+    return(T)
+  }else{
+    warning("Library extrafont installed; using system sans/serif libraries as fallback fonts. 
+    To enable full font support, run: 
+      install.packages('extrafont') 
+      font_import()")
+    return(F)
+  }
+}
+
+
+# set font
+base_font_family_tufte <- function(){
+  if(is.extrafont.installed()){
+    library(extrafont)
+    tuftefont <- choose_font(c("Gill Sans MT", "Gill Sans", "GillSans", "Verdana", "serif"), quiet = FALSE)   #
+  }else{
+    tuftefont <- "serif"
+  }
+  return(tuftefont)
+}
+
+theme_tufte_revised <- function(base_size = 11, base_family = base_font_family_tufte(), ticks = TRUE) {
+  
+  ret <- theme_bw(base_family = base_family, base_size = base_size) + 
+    theme(
+      axis.line = element_line(color = 'black'),
+      axis.title.x = element_text(vjust = -0.3), 
+      axis.title.y = element_text(vjust = 0.8),
+      legend.background = element_blank(), 
+      legend.key = element_blank(), 
+      legend.title = element_text(face="plain"),
+      panel.background = element_blank(), 
+      panel.border = element_blank(),
+      panel.grid = element_blank(),
+      plot.background = element_blank(),
+      strip.background = element_blank()
+    )
+  
+  if (!ticks) {
+    ret <- ret + theme(axis.ticks = element_blank())
+  }
+  
+  ret
+} 
+
+
+```
+
+
+
+
+
+# Read in Data
+```{r}
+policyfeatures <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "PPSrateFeatures")
+mcradjs <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "MedicareAdjustments") %>% rename(FIPS = `Included FIPS`, MCRadjustment = `2023 FQHC GAF`)
+clinicrates <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "PPSRates")
+```
+
+# Filter for New Clinics
+
+```{r}
+uds.cw <- read.csv(file = "//Users/markow/Dropbox/Git/APMs/data_processed/Merged_CW.csv", colClasses = "character") %>% 
+  mutate(link.ID = ifelse(is.na(ModernGranteeID) & !is.na(LongGrantID) & Year != 2010, LongGrantID, 
+                   ifelse(is.na(ModernGranteeID) & !is.na(GranteeID), GranteeID, BHCMIS.ID)), 
+         Year = as.integer(Year))
+```
+
+# Place clinics in counties
+
+Counties are assigned to each CHC, one per clinic based on headquarters location
+
+```{r}
+
+geocodes <- geo(street = clinicrates$HealthCenterStreetAddress, city = clinicrates$HealthCenterCity, state = clinicrates$HealthCenterState, 
+             method = "census", 
+             full_results = TRUE, api_options = list(census_return_type = 'geographies'))
+
+df.geocoded <- geocodes %>% 
+  mutate(FIPS = paste(state_fips, county_fips, sep = "")) %>% 
+  mutate(FIPS = ifelse(FIPS == "NANA", NA, FIPS)) %>% 
+  select(FIPS) %>% 
+  cbind(clinicrates)
+
+
+chc <- read.csv("//Users/markow/Dropbox/Git/Competition/data_raw/chc.csv") %>% 
+  mutate(State.and.County.Federal.Information.Processing.Standard.Code = str_pad(State.and.County.Federal.Information.Processing.Standard.Code, 5, pad = "0"))
+
+
+df.geocoded[is.na(df.geocoded$FIPS),] <- df.geocoded[is.na(df.geocoded$FIPS),] %>% 
+  left_join(chc, by = c("GrantNumber" = "Health.Center.Number", "HealthCenterStreetAddress" = "Site.Address")) %>%
+  mutate(FIPS = ifelse(is.na(FIPS), State.and.County.Federal.Information.Processing.Standard.Code, FIPS)) %>%
+  select(FIPS:HealthCenterZIPCode) %>%
+  unique()
+
+df.geocoded[is.na(df.geocoded$FIPS),] <- df.geocoded[is.na(df.geocoded$FIPS),] %>% 
+  left_join(chc, by = c("GrantNumber" = "Health.Center.Number", "HealthCenterName...14" = "Site.Name")) %>%
+  mutate(FIPS = ifelse(is.na(FIPS), State.and.County.Federal.Information.Processing.Standard.Code, FIPS)) %>%
+  select(FIPS:HealthCenterZIPCode) %>%
+  unique()
+
+
+df.geocoded[is.na(df.geocoded$FIPS),] <- df.geocoded[is.na(df.geocoded$FIPS),] %>% 
+  left_join(chc, by = c("GrantNumber" = "Health.Center.Number", "HealthCenterName...14" = "Site.Name")) %>%
+  mutate(FIPS = ifelse(is.na(FIPS), State.and.County.Federal.Information.Processing.Standard.Code, FIPS)) %>%
+  select(FIPS:HealthCenterZIPCode) %>%
+  unique()
+
+
+
+df.geocoded[is.na(df.geocoded$FIPS),] <- df.geocoded[is.na(df.geocoded$FIPS),] %>% 
+  left_join(chc %>% 
+  select(Health.Center.Number, State.and.County.Federal.Information.Processing.Standard.Code) %>% 
+  unique() %>% 
+  inner_join(chc %>% 
+  select(Health.Center.Number, State.and.County.Federal.Information.Processing.Standard.Code) %>% 
+  unique() %>% 
+  group_by(Health.Center.Number) %>% 
+  summarise(Counts = n()) %>% 
+  filter(Counts == 1), by = c("Health.Center.Number")), by = c("GrantNumber" = "Health.Center.Number")) %>% 
+  mutate(FIPS = ifelse(is.na(FIPS), State.and.County.Federal.Information.Processing.Standard.Code, FIPS))
+
+
+
+df.geocoded.2 <- geo(address = df.geocoded[is.na(df.geocoded$FIPS),] %>% 
+  mutate(Addresses = paste(HealthCenterStreetAddress, HealthCenterCity, HealthCenterState, HealthCenterZIPCode, sep = ", ")) %>% 
+    select(Addresses) %>% unlist(), 
+             method = "census", 
+             full_results = TRUE, api_options = list(census_return_type = 'geographies'))
+df.geocoded.2 <- df.geocoded.2 %>% 
+  mutate(FIPS = paste(state_fips, county_fips, sep = "")) %>% 
+  mutate(FIPS = ifelse(FIPS == "NANA", NA, FIPS)) %>% 
+  select(FIPS)
+
+df.geocoded[is.na(df.geocoded$FIPS),]$FIPS <- df.geocoded.2$FIPS
+
+```
+
+## Manual Geocoding
+```{r}
+
+df.geocoded <- df.geocoded %>% 
+  #filter(!is.na(MatchingID) & is.na(FIPS)) %>% 
+  #select(FIPS, GrantNumber, HealthCenterStreetAddress:HealthCenterZIPCode) %>% 
+  mutate(FIPS = ifelse(GrantNumber == "H80CS00448", "04005", 
+                ifelse(GrantNumber == "H80CS33638", "04015", 
+                ifelse(GrantNumber == "H80CS00651", "04005", 
+                ifelse(GrantNumber == "H80CS00260", "06035", 
+                ifelse(GrantNumber == "H80CS28981", "06057",
+                
+                ifelse(GrantNumber == "H80CS00427", "13195", 
+                ifelse(GrantNumber == "H80CS00726", "17055",  
+                ifelse(GrantNumber == "H80CS26580", "22051", 
+                ifelse(GrantNumber == "H80CS00855", "22077", 
+                ifelse(GrantNumber == "H80CS00513", "22069", 
+                ifelse(GrantNumber == "H80CS00487", "28121", 
+                ifelse(GrantNumber == "H80CS00610", "28035", 
+                ifelse(GrantNumber == "H80CS08737", "37091", 
+                       
+                ifelse(GrantNumber == "H80CS00107", "37155", 
+                ifelse(GrantNumber == "H80CS00655", "37163", 
+                ifelse(GrantNumber == "H80CS00862", "31141",      
+                ifelse(GrantNumber == "H80CS00737", "31055", 
+                ifelse(GrantNumber == "H80CS00380", "34001", 
+                ifelse(GrantNumber == "H80CS00603", "35013",  
+                       
+                ifelse(GrantNumber == "H80CS00605", "35039", 
+                ifelse(GrantNumber == "H80CS00607", "35039", 
+                ifelse(GrantNumber == "H80CS00306", "36061",      
+                ifelse(GrantNumber == "H80CS00125", "48175", 
+                ifelse(GrantNumber == "H80CS00076", "42055", 
+                ifelse(GrantNumber == "H80CS12889", "48315",  
+                
+                ifelse(GrantNumber == "H80CS12856", "48415",      
+                ifelse(GrantNumber == "H80CS00348", "48061", 
+                ifelse(GrantNumber == "H80CS06659", "50023", 
+                ifelse(GrantNumber == "H80CS00147", "53001",  
+                
+                ifelse(GrantNumber == "H80CS00459", "21109", 
+                ifelse(GrantNumber == "H80CS00106", "21135", 
+                ifelse(GrantNumber == "H80CS07890", "49053", 
+                       
+                ifelse(GrantNumber == "H80CS00690", "08013",   
+                ifelse(GrantNumber == "H80CS28361", "08017",  
+                ifelse(GrantNumber == "H80CS00544", "16009",  
+                ifelse(GrantNumber == "H80CS00473", "16039",  
+                ifelse(GrantNumber == "H80CS28352", "26073",  
+                       
+                       
+                ifelse(GrantNumber == "H80CS00190", "26143",   
+                ifelse(GrantNumber == "H80CS26511", "26103",  
+                ifelse(GrantNumber == "H80CS28973", "45031",  
+                ifelse(GrantNumber == "H80CS00092", "45005",  
+                ifelse(GrantNumber == "H80CS00501", "45025",                       
+                ifelse(GrantNumber == "H80CS00280", "55025",        
+                       
+                       FIPS))))))))))))))))))))))))))))))))))))))))))))
+
+
+```
+
+
+## UDS Data
+
+```{r}
+coredata <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "HealthCenterInfo", skip = 0) %>% select(GrantNumber, FundingCHC:UrbanRuralFlag)
+
+table3b <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "Table3B", skip = 0)[-1,] %>% select(BHCMISID, GrantNumber, T3b_L1_Cb, T3b_L3_Cb, T3b_L8_Ca, T3b_L5_Cb, T3b_L26_Ca, T3b_L12_Ca)
+namevec <- c( "BHCMISID", "ModernGranteeID", "NHA", "NHB", "HL", "NHW", "Total", "Eng2ndLang")
+table3b <- table3b %>% 
+    rename_all(vars(namevec), function(x) namevec)
+
+
+
+table4 <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "Table4", skip = 0)[-1,] %>% select(BHCMISID, GrantNumber, T4_L1_Ca, T4_L2_Ca, T4_L3_Ca, T4_L4_Ca, T4_L5_Ca, T4_L16_Ca, T4_L23_Ca, T4_L7_Ca, T4_L7_Cb, T4_L8_Ca, T4_L8_Cb, T4_L9_Ca, T4_L9_Cb, T4_L10_Ca, T4_L10_Cb, T4_L11_Ca, T4_L11_Cb) 
+namevec <- c("BHCMISID", "ModernGranteeID", "<100%", "101-150%", "151-200%", ">200%", "Unknown", "FarmWorker", "Homeless", 
+             "Uninsured.young", "Uninsured.old", "MCD.young", "MCD.old", "MCR.young", "MCR.old", "OtherPublic.young", "OtherPublic.old", "COM.young", "COM.old")
+table4 <- table4 %>% 
+    rename_all(vars(namevec), function(x) namevec)
+
+
+
+uds.covariates <- inner_join(table3b, table4, by = c("BHCMISID","ModernGranteeID")) 
+
+
+for (i in 3:ncol(uds.covariates)){
+uds.covariates[,i] <- as.numeric(unlist(uds.covariates[,i]))
+}
+
+
+for (i in 1:nrow(uds.covariates)){
+  for(k in 3:ncol(uds.covariates)){
+  if (is.na(uds.covariates[i,k])) {
+uds.covariates[i,k] <- 0}
+} 
+}
+
+
+
+df.geo.step <- df.geocoded %>% 
+  left_join(uds.covariates %>% select(ModernGranteeID:COM.old), by = c("GrantNumber" = "ModernGranteeID")) %>% 
+  left_join(coredata, by = c("GrantNumber"))
+
+
+
+uds.6b.names <- c("BHCMISID","GrantNumber","imm.Num","imm.Rate","imm.denom","Pap.Rate","Pap.Num","pap.denom","Mammo.Rate","Mammo.Num","Mammo.denom",
+                  "ChildBMI.rate","ChildBMI.num","ChildBMI.denom","AdultBMI.rate","AdultBMI.num","AdultBMI.denom","Tobacco.rate","Tobacco.num","Tobacco.denom",
+                  "cad.rate","cad.num","cad.denom", "ivd.rate","ivd.num","ivd.denom",
+                  "crc.rate","crc.num","crc.denom", "HIV.rate","HIV.num","HIV.denom", "HIVscrn.rate","HIVscrn.num","HIVscrn.denom","depscrn.rate","depscrn.num","depscrn.denom",
+                  "depremis.rate","depremis.num","depremis.denom", "dental.rate","dental.num","dental.denom")
+table6b <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "Table6BClinicalmeasures", skip = 0) 
+table6b <- table6b %>% setNames(uds.6b.names) %>% 
+   mutate(imm.rate = as.numeric(imm.Num) / as.numeric(imm.denom), 
+         pap.rate = as.numeric(Pap.Num) / as.numeric(pap.denom), 
+         mammo.rate = as.numeric(as.numeric(Mammo.Num) / as.numeric(Mammo.denom)), 
+         crc.rate = as.numeric(crc.num) / as.numeric(crc.denom), 
+         childbmi.rate = as.numeric(as.numeric(ChildBMI.num) / as.numeric(ChildBMI.denom)), 
+         adultbmi.rate = as.numeric(as.numeric(AdultBMI.num) / as.numeric(AdultBMI.denom)), 
+         cad.rate = as.numeric(as.numeric(cad.num) / as.numeric(cad.denom)), 
+         ivd.rate = as.numeric(as.numeric(ivd.num) / as.numeric(ivd.denom)), 
+         HIVscrn.rate = as.numeric(as.numeric(HIVscrn.num) / as.numeric(HIVscrn.denom)),
+         depscrn.rate = as.numeric(as.numeric(depscrn.num) / as.numeric(depscrn.denom)),
+         dental.rate = as.numeric(as.numeric(dental.num) / as.numeric(dental.denom)) 
+         ) %>% 
+  select(BHCMISID, GrantNumber, imm.rate, pap.rate, mammo.rate, crc.rate, childbmi.rate, adultbmi.rate, cad.rate, ivd.rate, HIVscrn.rate, depscrn.rate, dental.rate)
+
+```
+
+
+
+## Process Data
+```{r}
+
+## Join sets, get values, clean and pair down
+df.geo <- df.geo.step %>% 
+  
+  mutate(MCDrate = ifelse(!is.na(Values), Values,  
+                          ifelse(is.na(Values) & !is.na(Medical), Medical, Values_min))) %>% 
+  
+  mutate(MCDrate = as.numeric(MCDrate)) %>% 
+  mutate(Pct.NHA = NHA / Total * 100,
+         Pct.NHB = NHB / Total * 100,
+         Pct.HL = HL / Total * 100,
+         Pct.NHW = NHW / Total * 100,
+         Pct.ESL = Eng2ndLang / Total * 100,
+         Pct.Children = (MCD.young + MCR.young + OtherPublic.young + COM.young + Uninsured.young) / Total * 100,
+         Pct.LessThan100pctFPL = ifelse(Total == Unknown, 100, `<100%` / (Total- Unknown) * 100),
+         Pct.LessThan200pctFPL = ifelse(Total == Unknown, 100, (`<100%` + `101-150%` + `151-200%`) / (Total - Unknown) * 100),
+         Pct.FarmWorker = FarmWorker / Total * 100,
+         Pct.Homeless = Homeless / Total * 100,
+         Pct.None = (Uninsured.young + Uninsured.old) / Total * 100, 
+         Pct.MCD = (MCD.young + MCD.old) / Total * 100, 
+         Pct.MCR = (MCR.young + MCR.old) / Total * 100, 
+         Pct.COM = (COM.young + COM.old) / Total * 100) %>% 
+  select(FIPS, Tribal, BHCMISID:HealthCenterZIPCode, MCDrate, Total, FundingCHC:UrbanRuralFlag, Pct.NHA:Pct.COM)
+
+df.missing <- df.geo
+
+## Pull the MCR rates
+df.geo <- df.geo %>% 
+
+  left_join(mcradjs %>% select(FIPS, State, MCRadjustment), by = c("FIPS", "HealthCenterState" = "State")) %>% 
+  left_join(mcradjs %>% filter(is.na(FIPS)) %>% select(State, MCRadjustment) , by = c("HealthCenterState" = "State")) %>% 
+  mutate(MCRadjustment = ifelse(!is.na(MCRadjustment.x), MCRadjustment.x, MCRadjustment.y), 
+         MCRrate = ifelse(!is.na(MCRadjustment.x), MCRadjustment.x, MCRadjustment.y) * ifelse(is.na(Tribal), 187.19, 667)) %>% 
+  select(FIPS:MCDrate, MCRadjustment, MCRrate, Total:Pct.COM) %>% 
+  mutate(Diff = MCDrate - MCRrate, 
+         Bin = ifelse(Diff > 0, 1, 0))
+
+df.medicare <- df.geo
+
+df.geo <- df.geo %>% 
+  filter(!is.na(FIPS)) %>% 
+  filter(MCDrate != "Multiple" | !is.na(MCDrate)) 
+
+summary(df.geo$Diff)
+
+
+mean(df.geo$Bin)
+dim(df.geo[!is.na(df.geo$Diff),])
+
+length(unique(df.geo$HealthCenterState))
+
+df.geo %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(rate = median(MCDrate)) %>% 
+  arrange(rate)
+
+
+nrow(df.geo) - nrow(df.geo.step)
+
+
+mean(df.geo[is.na(df.geo$Tribal),]$Diff)
+sd(df.geo[is.na(df.geo$Tribal),]$Diff)
+
+t.test(df.geo$Diff)
+```
+
+
+
+
+# Analysis
+
+
+
+
+## Maps
+
+```{r}
+
+
+
+plot_usmap(data = policyfeatures %>% select(`Postal Code`, FOIArequest) %>% 
+             rename(HealthCenterState = `Postal Code`) %>% 
+             left_join(df.geo %>% 
+                      group_by(HealthCenterState) %>% 
+                      summarise(Bin = mean(Bin)) %>% 
+  ungroup() %>% 
+  select(HealthCenterState, Bin), by = c("HealthCenterState")) %>% 
+    rename(state = HealthCenterState), values = "Bin", regions = "state", color = "white", size = 0.3) + 
+  scale_fill_gradient(low = "gold", high = "navy", limits=c(0, 1)) + 
+  #scale_fill_discrete(type = "viridis", aes(alpha = I(Treatment + 0.5))) + 
+  #labs(title = "By APM Class") +
+  
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+
+
+
+plot_usmap(data = policyfeatures %>% select(`Postal Code`, FOIArequest) %>% 
+             rename(HealthCenterState = `Postal Code`) %>% 
+    rename(state = HealthCenterState), values = "FOIArequest", regions = "state", color = "white", size = 0.3) + 
+  #scale_fill_discrete(type = "viridis", aes(alpha = I(Treatment + 0.5))) + 
+  #labs(title = "By APM Class") +
+  
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+
+
+p <- df.geo %>% 
+  mutate(Tribal = ifelse(is.na(Tribal), 0, 1)) %>% 
+  ggplot(aes(x = reorder(HealthCenterState, Diff, median), y = Diff)) + 
+  geom_boxplot() + #outlier.colour = ifelse(Tribal == 1, "red", "black")
+  geom_point(data = df.geo %>% filter(Tribal == "Yes"), aes(color = "red")) +
+  
+  ylab("Difference in Rates") + xlab("States") + 
+  ggtitle("Difference between Medicaid and Medicare PPS Rates among CHCs in select States") + 
+  theme_tufte_revised() + 
+  geom_hline(yintercept=0, color="blue", linetype="dashed", alpha= 0.8)
+p + labs(color='Tribal FQHCs') 
+
+
+p <- df.geo %>% 
+  mutate(Tribal = ifelse(is.na(Tribal), 0, 1)) %>% 
+  ggplot(aes(y = reorder(HealthCenterState, Diff, median), x = Diff)) + 
+  geom_boxplot() + #outlier.colour = ifelse(Tribal == 1, "red", "black")
+  geom_point(data = df.geo %>% filter(Tribal == "Yes"), aes(color = "red")) +
+  
+  xlab("Difference in Medicaid vs Medicare Rates ($, PPS)") + ylab("States") + 
+  ggtitle("Difference between Medicaid and Medicare PPS Rates among CHCs in select States") + 
+  theme_tufte_revised() + 
+  geom_vline(xintercept=0, color="darkgrey", linetype="dashed", alpha= 0.8)
+p + labs(color='Tribal FQHCs') + theme(legend.position="bottom")
+
+
+# plot_usmap(data = df.geo %>% 
+#                       group_by(HealthCenterState) %>% 
+#                       summarise(Outcome = mean(Pct.HL)) %>% 
+#   ungroup() %>% 
+#   select(HealthCenterState, Outcome) %>% 
+#     rename(state = HealthCenterState), values = "Outcome", regions = "state", color = "white", size = 0.3) + 
+#   scale_fill_gradient(low = "gold", high = "navy", limits=c(0, 100)) + 
+#   #scale_fill_discrete(type = "viridis", aes(alpha = I(Treatment + 0.5))) + 
+#   #labs(title = "By APM Class") +
+#   
+#   theme(plot.title = element_text(hjust = 0.5))
+
+
+# grouped_data <- us_map() |>
+#   mutate(
+#     group = sample(
+#       c('A', 'B', 'C', 'D'),
+#       size = 51,
+#       replace = TRUE
+#     )
+#   ) %>% left_join(policyfeatures %>% select(`Postal Code`, FOIArequest) %>%
+#              rename(HealthCenterState = `Postal Code`) %>%
+#              left_join(df.geo %>%
+#                       group_by(HealthCenterState) %>%
+#                       summarise(`Percent MCD > MCR` = mean(Bin, na.rm = TRUE) * 100) %>%
+#   ungroup() %>%
+#   select(HealthCenterState, `Percent MCD > MCR`), by = c("HealthCenterState")), by = c("abbr" = "HealthCenterState"))
+# 
+# 
+# grouped_data  |>
+#   ggplot() +
+#   geom_sf_pattern(aes(fill = `Percent MCD > MCR`, pattern = FOIArequest)) +
+#   theme(legend.position = 'none') +
+#   theme_void() +
+#   scale_fill_gradient(low = "red", high = "royalblue", limits=c(0, 100))
+
+
+
+plot_usmap(data = policyfeatures %>% select(`Postal Code`, FOIArequest) %>% 
+             rename(HealthCenterState = `Postal Code`) %>% 
+             left_join(df.geo %>% 
+                      group_by(HealthCenterState) %>% 
+                      summarise(MCDrate = mean(MCDrate)) %>% 
+                        arrange(MCDrate) %>% 
+                        mutate(`Average Medicaid\nPPS Rate, $` = ifelse(MCDrate > 350, 350, MCDrate)) %>% 
+                        
+  ungroup() %>% 
+  select(HealthCenterState, `Average Medicaid\nPPS Rate, $`), by = c("HealthCenterState")) %>% 
+    rename(state = HealthCenterState), values = "Average Medicaid\nPPS Rate, $", regions = "state", color = "white", size = 0.3) + 
+  scale_fill_gradient(low = "gold", high = "navy", limits=c(128, 350)) + 
+  #scale_fill_discrete(type = "viridis", aes(alpha = I(Treatment + 0.5))) + 
+  #labs(title = "By APM Class") +
+  
+  theme(plot.title = element_text(hjust = 0.5)) + ggtitle("Average Medicaid PPS Rate by State, 2023")
+
+
+
+```
+
+
+
+## Regression
+
+```{r}
+
+df.modeling <- df.geo #%>% filter(HealthCenterState %notin% c("PA"))
+
+
+model1 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("CA","LA")), MCDrate ~ Pct.NHB + Pct.HL + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag + FundingCHC + FundingMHC + FundingHO + FundingPH)
+
+
+model2 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("CA","LA")), MCDrate ~ Pct.NHB + Pct.HL  +  Pct.Homeless + Pct.FarmWorker + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag + FundingCHC + FundingMHC + FundingHO + FundingPH)
+
+model2.5 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("CA","LA")), MCDrate ~ Pct.NHB * Pct.HL  +  Pct.Homeless + Pct.FarmWorker + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag + FundingCHC + FundingMHC + FundingHO + FundingPH)
+
+model3 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+
+model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag )
+
+model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+
+#stargazer(model1, model2, model2.5, model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
+stargazer(model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
+```
+
+
+
+## Back of the Envelop Calculation
+```{r}
+
+# v <- df.modeling %>% 
+#   select(Total, Pct.MCD, Pct.NHB, Pct.HL, MCDrate) %>% 
+#   summarise_all(mean)
+# 
+# v[1] * v[2]/100 * (model5$coefficients[2] * 10 + model5$coefficients[3] * 10) * 2.5
+# v[1] * v[2]/100 * (model5$coefficients[2] * v[3] + model5$coefficients[3] * v[4]) * 2.5
+
+
+
+cbind(df.modeling, Predicted = predict(model5, df.modeling)) %>% 
+  mutate(Unoh = MCDrate - Predicted) %>% 
+ggplot(aes(x = reorder(HealthCenterState, Predicted, median), y = Predicted)) + 
+  geom_boxplot()
+
+
+df.underpayment <- df.modeling %>% 
+  mutate(Uhoh = model5$coefficients[2] * Pct.NHB + model5$coefficients[3] * Pct.HL) %>% 
+  mutate(Underpayment = Uhoh * Pct.MCD / 100 * Total * 2)
+
+
+df.underpayment%>% 
+  ggplot(aes(x = reorder(HealthCenterState, Uhoh, median), y = Uhoh)) + 
+  geom_boxplot() + 
+  ylab("Difference in Rates") + xlab("States") + 
+  ggtitle("Estimated Underpayment for services rendered") + 
+  theme_tufte_revised() + 
+  geom_hline(yintercept=0, color="blue", linetype="dashed", alpha= 0.8)
+
+
+summary(df.underpayment$Underpayment)
+summary(df.underpayment$Uhoh)
+
+```
+
+
+## Mixed Effects Version
+```{r}
+
+
+model <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.Homeless + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+summary(model)
+
+
+model <- lmer(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + (1|MCRadjustment)  + UrbanRuralFlag)
+summary(model)$coeff
+
+
+```
+
+
+## Medicare?
+```{r}
+
+df.medicare %>% 
+  mutate(BinaryAdjustment = ifelse(MCRadjustment >= 1, "AdjustedUp", "AdjustedDown")) %>% 
+  select(FundingCHC:BinaryAdjustment) %>% 
+  mutate(FundingCHC = as.logical(FundingCHC), 
+         FundingMHC = as.logical(FundingMHC), 
+         FundingHO = as.logical(FundingHO), 
+         FundingPH = as.logical(FundingPH)) %>% 
+    tbl_summary(by = BinaryAdjustment, 
+                statistic = list(all_continuous() ~ "{mean} ({sd})"), missing = "no") %>% 
+  add_p(test = everything() ~ "t.test", pvalue_fun = function(x) style_pvalue(x, digits = 3))
+
+
+summary(lm(data = df.medicare, MCRrate ~ Pct.NHB + Pct.HL + Pct.Homeless + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCR + Pct.MCD + Pct.None + UrbanRuralFlag))
+
+```
+
+
+
+
+
+# Why 
+## Relationship with Org Features, Process Data
+
+
+## Read in Data
+```{r}
+cw <- read_excel(path = "//Users/markow/Dropbox/Git/Data/UDS-990 Crosswalk.xlsx", sheet = "Sheet1")
+fins <- read.csv(file = "//Users/markow/Dropbox/Git/Data/Updated_FQHC_Revenue_vs_Expenses.csv")
+fins.staff <- read.csv(file = "//Users/markow/Dropbox/Git/Data/Updated_FQHC_Staffing.csv")
+need <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "Table6A", skip = 0)
+need.names <- unlist(need[1,])
+need[,-c(1:2)] <- data.frame(sapply(need[,-c(1:2)], as.numeric))
+need <- need[-1,]
+```
+
+
+## Build Mediators
+```{r}
+need.intensity <- cbind(need[,c(1,2)], need[,seq(3, ncol(need), 2)] / need[,seq(4, ncol(need), 2)])
+need.prevalence <- cbind(need[,c(1,2)], need[,seq(4, ncol(need), 2)] / uds.covariates$Total * 100)
+
+## Remove testing
+need.intensity <- need.intensity[,c(1:33)]
+need.prevalence <- need.prevalence[,c(1:33)]
+
+need.prevalence <- cbind(need[,c(1,2)], Need = rowMeans((need[,seq(4, ncol(need), 2)] / uds.covariates$Total * 100)[,c(1, 8, 9, 13:15, 19, 26)], na.rm = TRUE))
+need.intensity <- cbind(need[,c(1,2)], Intensity = rowMeans((need[,seq(3, ncol(need), 2)] / need[,seq(4, ncol(need), 2)])[,c(1, 8, 9, 13:15, 19, 26)], na.rm = TRUE))
+
+
+
+colnames(fins) <- gsub("X.", "", colnames(fins))
+colnames(fins) <- gsub("\\.\\.", "", colnames(fins))
+
+
+table(fins$form_year)
+
+df.fins <- df.modeling %>% 
+  left_join(cw %>% select(EIN, `Grant Number`), by = c("GrantNumber" = "Grant Number")) %>% 
+  left_join(fins %>% filter(form_year == "2022"), by = c("EIN")) %>% 
+  left_join(fins.staff, by = c("EIN", "form_year" = "Year")) %>% 
+  mutate(Ratio = ifelse(is.na(Staff) | Staff == 0, NA, log(Total / Staff))) %>% 
+  left_join(need.prevalence, by = ("GrantNumber")) %>% 
+  left_join(need.intensity, by = c("GrantNumber")) %>% 
+  mutate(CostPerPatient = ngla_prog_expense / Total)
+
+```
+
+
+
+## Simple analysis, controlling for need
+
+```{r}
+model.need1 <- lm(data = df.fins , MCDrate ~ Pct.NHB+ Pct.HL  + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+model.need2 <- lm(data = df.fins , MCDrate ~ Pct.NHB + Pct.HL  + Need + Pct.Homeless + Pct.NHA +  Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+model.need3 <- lm(data = df.fins , MCDrate ~ Pct.NHB* Pct.HL + Need +  Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
+
+stargazer(model.need1, model.need2, model.need3, type = 'text', omit = c("HealthCenterState","Constant"))
+
+
+```
+
+
+
+## IV Investigtation
+```{r}
+
+## First Stages
+
+mechmodel.1 <- lm(data = df.fins, Intensity ~  Pct.NHB + Pct.HL +  Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None  + I(MCRadjustment*100) + UrbanRuralFlag+ HealthCenterState)
+mechmodel.2 <- lm(data = df.fins, Need ~  Pct.NHB + Pct.HL +  Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + I(MCRadjustment*100) + UrbanRuralFlag + HealthCenterState)
+mechmodel.3 <- lm(data = df.fins, Ratio ~  Pct.NHB + Pct.HL +  Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None  + I(MCRadjustment*100) + UrbanRuralFlag+ HealthCenterState)
+mechmodel.4 <- lm(data = df.fins, I(CostPerPatient / Intensity / Need) ~  Pct.NHB + Pct.HL +  Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None  + I(MCRadjustment*100) + UrbanRuralFlag+ HealthCenterState)
+
+#stargazer(mechmodel.1, mechmodel.2, mechmodel.3, mechmodel.4, type = 'text', omit = c("HealthCenterState","Constant"))
+
+
+
+## IVs
+
+mechols.1 <- lm(MCDrate ~  Intensity  + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+mechols.2 <- lm(MCDrate ~  Need + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+mechols.3 <- lm(MCDrate ~  Ratio + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+mechols.4 <- lm(MCDrate ~  CostPerPatient + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+
+mechiv <- ivreg(MCDrate ~   Need + CostPerPatient | Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+summary(mechiv)
+
+
+
+
+stargazer(mechols.1, mechols.2, mechols.4, mechiv, type = 'text', omit = c("HealthCenterState","Constant"))
+
+
+```
+
+
+
+
+## Missingness and Key Descriptive Analysis
+```{r}
+
+
+df.missing %>% 
+  left_join(df.fins %>% filter(!is.na(CostPerPatient)) %>% select(BHCMISID, MCRrate, Diff) %>% mutate(Included = 1), by = c("BHCMISID")) %>% 
+  mutate(InSample = ifelse(is.na(Included), "No", "Yes")) %>% 
+  #mutate(InSample = ifelse(is.na(MCDrate), "No", "Yes")) %>% 
+  select(Total:Pct.COM, InSample, MCDrate, MCRrate, Diff) %>% 
+  mutate(FundingCHC = as.logical(FundingCHC), 
+         FundingMHC = as.logical(FundingMHC), 
+         FundingHO = as.logical(FundingHO), 
+         FundingPH = as.logical(FundingPH)) %>% 
+    tbl_summary(by = InSample, 
+                statistic = list(all_continuous() ~ "{mean} ({sd})"), missing = "no") %>% 
+  add_p(test = everything() ~ "t.test", pvalue_fun = function(x) style_pvalue(x, digits = 3))
+
+
+
+summary(df.fins[is.na(df.fins$Tribal) & !is.na(df.fins$CostPerPatient),]$MCDrate)
+summary(df.fins[is.na(df.fins$Tribal) & !is.na(df.fins$CostPerPatient),]$MCRrate)
+```
+
+
+
+
+
+```{r}
+summary(lm(data = df.fins, Need ~ Pct.NHB + Pct.HL))
+```
+
+
+
+
+# KOB Decomposition to find residual discrimination
+
+```{r}
+
+library(oaxaca)
+
+#Ratio + Need +  CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + I(MCRadjustment*100) + UrbanRuralFlag + HealthCenterState + FundingCHC + FundingMHC + FundingHO + FundingPH
+
+splits <- 50
+results <- oaxaca(data = df.fins  %>% 
+                    mutate(Split = ifelse(( Pct.NHB + Pct.HL ) >= splits, 1, 
+                                                     ifelse(( Pct.NHB + Pct.HL ) <= splits, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>% 
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState")) %>% 
+    filter(!is.na(Split)),
+  # %>%
+  #   filter(HealthCenterState %notin% c("CA","LA")) %>%
+  #   filter(Cut > 0),
+  #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + MCRadjustment + Need + Ratio + Intensity | Split, R = 1000, cluster = df.fins$BHCMISID)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need  + Pct.Homeless + MCRadjustment  | Split, R = 1000, cluster = df.fins$BHCMISID)
+ # MCDrate ~ AvgMCDrate + CostPerPatient + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
+
+
+plot(results, decomposition = "threefold")
+
+results$y$y.diff
+results$threefold$overall
+results$threefold$overall[c(1,3,5)] / results$threefold$overall[c(2,4,6)]
+results$threefold$overall[c(1,3,5)] / results$y$y.diff * 100
+
+
+quantile(df.fins$CostPerPatient, probs = c(0.025, 0.975), na.rm = TRUE)
+quantile(df.fins$MCDrate, probs = c(0.025, 0.975), na.rm = TRUE)
+
+
+quantile(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$CostPerPatient, probs = c(0.025, 0.975), na.rm = TRUE)
+quantile(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$MCDrate, probs = c(0.025, 0.975), na.rm = TRUE)
+
+summary(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Pct.NHB + df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Pct.HL)
+
+summary(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Pct.MCD)
+
+
+lm(data = df.fins  %>% 
+                    mutate(Split = ifelse((Pct.NHB + Pct.HL ) >= 50, 1, 
+                                                     ifelse((Pct.NHB + Pct.HL ) <= 50, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>% 
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState")) %>% 
+    filter(!is.na(Split)), MCDrate ~ Split)
+
+
+df.fins  %>% filter(!is.na(Tribal) | HealthCenterState %in% c("CA","LA"))
+
+summary(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Need)
+
+```
+
+
+
+$$ R = ( \bar{X}_1 - \bar{X}_2 ) \beta_2 + \bar{X}_2 ( \beta_1 - \beta_2 ) + ( \bar{X}_1 - \bar{X}_2 ) ( \beta_1 - \beta_2 ) $$
+
+1. Endowment Effect (E)
+The endowment effect measures the portion of the outcome difference that is due to differences in the predictors (or endowments) between the two groups. It is calculated as:
+
+$$ E = ( \bar{X}_1 - \bar{X}_2 ) \beta_2 $$
+
+( \bar{X}_1 ) and ( \bar{X}_2 ) are the mean vectors of the predictors for groups 1 and 2, respectively.
+( \beta_2 ) is the vector of coefficients for group 2.
+This term shows how much of the difference in the outcome would be expected if group 2 had the same characteristics as group 1 but retained its own coefficients.
+
+2. Coefficient Effect (C)
+The coefficient effect captures the portion of the outcome difference that is due to differences in the coefficients (or returns to endowments) between the two groups. It is calculated as:
+
+$$ C = \bar{X}_2 ( \beta_1 - \beta_2 ) $$
+
+( \bar{X}_2 ) is the mean vector of the predictors for group 2.
+( \beta_1 ) and ( \beta_2 ) are the vectors of coefficients for groups 1 and 2, respectively.
+This term shows how much of the difference in the outcome would be expected if group 2 had the same coefficients as group 1 but retained its own characteristics.
+
+3. Interaction Effect (I)
+The interaction effect measures the combined impact of differences in both predictors and coefficients. It is calculated as:
+
+$$ I = ( \bar{X}_1 - \bar{X}_2 ) ( \beta_1 - \beta_2 ) $$
+
+( \bar{X}_1 ) and ( \bar{X}_2 ) are the mean vectors of the predictors for groups 1 and 2, respectively.
+( \beta_1 ) and ( \beta_2 ) are the vectors of coefficients for groups 1 and 2, respectively.
+This term captures the interaction between having different characteristics and being rewarded differently for those characteristics.
+
+
+
+## Presenting Results
+
+```{r}
+
+df.kob <- df.fins  %>% 
+                    mutate(Split = ifelse((Pct.NHB + Pct.HL) >= 50, 1, 
+                                                     ifelse((Pct.NHB + Pct.HL) <= 50, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>% 
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState")) %>% 
+    filter(!is.na(Split))
+
+
+mean(df.kob[df.kob$Split == 1,]$Total * df.kob[df.kob$Split == 1,]$Pct.MCD / 100) * 2.5 * (results$threefold$overall[5])
+mean(df.kob[df.kob$Split == 1,]$Total) * 2.5 * (results$threefold$overall[3] + results$threefold$overall[5])
+
+
+nrow(df.kob[df.kob$ngla_net_gain_loss < 0 & !is.na(df.kob$ngla_net_gain_loss),])/nrow(df.kob[!is.na(df.kob$ngla_net_gain_loss),])
+
+nrow(df.kob[df.kob$ngla_net_gain_loss>mean(df.kob[df.kob$Split == 1,]$Total) * 2.5 * (results$threefold$overall[5]) & df.kob$ngla_net_gain_loss < 0 & !is.na(df.kob$ngla_net_gain_loss),])/nrow(df.kob[!is.na(df.kob$ngla_net_gain_loss),])
+
+
+
+
+percs <- (round(results$threefold$overall[c(1,3,5)] / results$y$y.diff * 100))
+
+
+p <- cbind(rownames(results$threefold$variables), results$threefold$variables) %>% 
+  data.frame() %>% select(V1, contains("coef.")) %>% 
+  pivot_longer(cols= coef.endowments.:coef.interaction.) %>% 
+  cbind(  cbind(rownames(results$threefold$variables), results$threefold$variables) %>% 
+  data.frame() %>% select(contains("se.")) %>% pivot_longer(cols= se.endowments.:se.interaction.) %>% rename(name_se = name, value_se = value)) %>% 
+  
+  filter(V1 != '(Intercept)') %>% 
+  mutate(value = as.numeric(value), 
+         value_se = as.numeric(value_se)) %>% 
+  mutate(type = gsub("coef\\.", "", name)) %>% 
+  mutate(type = gsub("\\.$", "", type)) %>% 
+  mutate(type = ifelse(type == "endowments", paste(" Endowments", "\n(", percs[1], "% diff.)", sep = ""), 
+                       ifelse(type == "coefficients", paste("Coefficients", "\n(", percs[2], "% diff.)", sep = ""), paste("Interaction", "\n(", percs[3], "% diff.)", sep = "")))) %>% 
+  arrange((value)) %>% 
+  ggplot(aes(y = reorder(V1, desc(value)), x = value, fill = ifelse(value >0, "1", "0"))) + 
+  geom_bar(stat = "identity", width = 0.5) +
+  geom_errorbar(aes(xmin = value - 1.96 * value_se, xmax = value + 1.96 * value_se), width = 0.2) + 
+  facet_wrap(~type,scales = "free_x") + 
+  theme(legend.position="none") + 
+   theme_tufte_revised() + 
+  geom_vline(xintercept=0, color="darkgrey", linetype="dashed")+ theme(legend.position="none")
+
+p
+
+
+
+results$y$y.diff
+results$threefold$overall
+results$threefold$overall[c(1,3,5)] / results$threefold$overall[c(2,4,6)]
+(round(results$threefold$overall[c(1,3,5)] / results$y$y.diff * 100))
+
+
+
+
+library(knitr)
+library(kableExtra)
+
+rbind(results$threefold$overall, results$threefold$variables) %>% 
+  kable("html", booktabs = T, col.names = c("Covariate","Estimate","SE","Estimate","SE","Estimate","SE")) %>% 
+  kable_styling(latex_options = c("striped")) %>%
+  pack_rows(index = c("Overall Impacts" = 1, "Covariates" = 6)) %>% 
+  add_header_above(c( "Covariates" = 1, "Endowments" = 2, "Coefficients" = 2, "Interaction" = 2)) 
+  
+
+```
+
+
+
+# BY Hand
+```{r}
+
+mean(df.kob[df.kob$Split == 1,]$MCDrate) - mean(df.kob[df.kob$Split == 0,]$MCDrate)
+
+
+df.kob %>% 
+  select(MCDrate, Split, AvgMCDrate, CostPerPatient, Need, Pct.Homeless, MCRadjustment) %>% 
+  filter(complete.cases(.)) %>% 
+  group_by(Split) %>% 
+  summarise(mean(MCDrate)) 
+
+
+```
+
+
+
+
+## Are these PPS rates at marginal cost? 
+
+```{r}
+
+df.uds.table5 <- read_excel("//Users/markow/Dropbox/Git/UDS/UDS-2023-Full-Dataset.xlsx", sheet = "Table5", skip = 0) 
+
+df.uds.table5 <- df.uds.table5 %>% 
+  select(GrantNumber, T5_L15_Cb, T5_L15_Cb2, T5_L19_Cb, T5_L19_Cb2, T5_L20_Cb, T5_L20_Cb2, T5_L22b_Cb, T5_L22b_Cb2) %>% 
+  filter(!is.na(GrantNumber) & GrantNumber != "---") 
+
+df.uds.table5 <- cbind(df.uds.table5[,1], TotalVisits = rowSums(sapply(df.uds.table5[,-1], as.numeric), na.rm = TRUE))
+
+
+
+mean.nas <- function(x)(mean(x, na.rm = TRUE))
+
+inner_join(df.uds.table5, df.fins, by = c("GrantNumber")) %>% 
+  mutate(CalculatedMarginalRate = ngla_prog_expense / TotalVisits) %>% #ngla_expense ngla_prog_expense
+  select(GrantNumber, MCDrate, MCRrate, CalculatedMarginalRate) %>% 
+  mutate(MCRsufficient = ifelse(MCRrate > CalculatedMarginalRate, 1, 0),
+         MCDsufficient = ifelse(MCDrate > CalculatedMarginalRate, 1, 0)) %>% 
+  summarise_all(mean.nas)
+
+
+
+```
+
+
+
+
+
+
+
+## Robustness - Tiered estimation
+
+```{r}
+
+diffs <- 0
+estimates <- rep(0, 7)
+
+for (k in c(2.5, 5, 7.5)){
+  splits <- k * 10
+results.reps <- oaxaca(data = df.fins  %>% 
+                    mutate(Split = ifelse((Pct.NHB + Pct.HL ) > splits & (Pct.NHB + Pct.HL ) <= splits + 25, 1, 
+                                                     ifelse((Pct.NHB + Pct.HL ) <= 25, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>% 
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState")) %>% 
+    filter(!is.na(Split)),
+  # %>%
+  #   filter(HealthCenterState %notin% c("CA","LA")) %>%
+  #   filter(Cut > 0),
+  #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + MCRadjustment + Need + Ratio + Intensity | Split, R = 1000, cluster = df.fins$BHCMISID)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need  + Pct.Homeless + MCRadjustment  | Split, R = 500)
+ # MCDrate ~ AvgMCDrate + CostPerPatient + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
+
+
+diffs <- c(diffs, results.reps$y$y.diff)
+estimates <- rbind(estimates, c(k*10, results.reps$threefold$overall))
+
+print(k)
+
+}
+
+diffs <- diffs[-1]
+estimates <- estimates[-1,]
+
+
+
+estimates[,c(1,3,5)+1]
+estimates[,c(1,3,5)+1] / estimates[,c(2,4,6)+1]
+estimates[,c(1,3,5)+1] / diffs * 100
+  
+
+
+```
+
+
+
+
+
+## Robustness - Vary the cut point, computer will freeze up
+
+```{r}
+
+diffs <- 0
+estimates <- rep(0, 7)
+
+for (k in 3:7){
+  splits <- k * 10
+results.reps <- oaxaca(data = df.fins  %>% 
+                    mutate(Split = ifelse((Pct.NHB + Pct.HL ) >= splits, 1, 
+                                                     ifelse((Pct.NHB + Pct.HL ) <= splits, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>% 
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState")) %>% 
+    filter(!is.na(Split)),
+  # %>%
+  #   filter(HealthCenterState %notin% c("CA","LA")) %>%
+  #   filter(Cut > 0),
+  #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + MCRadjustment + Need + Ratio + Intensity | Split, R = 1000, cluster = df.fins$BHCMISID)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need  + Pct.Homeless + MCRadjustment  | Split, R = 500)
+ # MCDrate ~ AvgMCDrate + CostPerPatient + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
+
+
+diffs <- c(diffs, results.reps$y$y.diff)
+estimates <- rbind(estimates, c(k*10, results.reps$threefold$overall))
+
+print(k)
+
+}
+
+diffs <- diffs[-1]
+estimates <- estimates[-1,]
+
+
+
+estimates[,c(1,3,5)+1]
+estimates[,c(1,3,5)+1] / estimates[,c(2,4,6)+1]
+estimates[,c(1,3,5)+1] / diffs * 100
+  
+
+
+```
+
+
+
+
+
+
+
+# Mediation Analysis
+
+ACME: The effect of the treatment on the outcome that is mediated through the mediator.
+ADE: The direct effect of the treatment on the outcome, not mediated by the mediator.
+Total Effect: The sum of the ACME and ADE.
+Proportion Mediated: The proportion of the total effect that is mediated through the mediator.
+
+```{r}
+library(mediation)
+#install.packages("devtools")
+#devtools::install_github("AllanJe/multimediate")
+
+
+df.mediation <- df.fins  %>% 
+                    mutate(Split = ifelse((Pct.NHB + Pct.HL) >= 50, 1, 
+                                                     ifelse((Pct.NHB + Pct.HL) <= 50, 0, NA))) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA")) %>%
+                    mutate(CostPerPatient = ifelse(CostPerPatient > 5944.5421, 5944.5421,
+                                                   ifelse(CostPerPatient < 446.4899, 446.4899, CostPerPatient))) %>%
+                    mutate(MCDrate = ifelse(MCDrate > 408.316, 408.316,
+                                                   ifelse(MCDrate < 123.558, 123.558, MCDrate))) %>%
+                    left_join(df.fins %>% 
+  filter(is.na(Tribal)) %>% 
+  group_by(HealthCenterState) %>% 
+  summarise(AvgMCDrate = median(MCDrate), 
+            minMCDrate = min(MCDrate), 
+            maxMCDrate = max(MCDrate), 
+            AvgDiff = mean(Diff), 
+            Cut = quantile(Diff, p = 0.5)), by = c("HealthCenterState"))%>% 
+  mutate(Tx = Pct.NHB + Pct.HL)
+
+df.mediation$HealthCenterState <- as.factor(df.mediation$HealthCenterState)
+df.mediation$HealthCenterState <- relevel(df.mediation$HealthCenterState, ref = "WY")
+
+# Fit the mediator model
+mediator_model <- lm(CostPerPatient ~ Tx + Pct.Homeless + MCRadjustment + AvgMCDrate, data = df.mediation )
+mediator_model_2 <- lm(Need ~ Tx + Pct.Homeless + MCRadjustment + AvgMCDrate, data = df.mediation )
+
+# Fit the outcome model
+outcome_model <- lm(MCDrate ~ Tx + CostPerPatient + Pct.Homeless + MCRadjustment + AvgMCDrate, data = df.mediation)
+outcome_model_2 <- lm(MCDrate ~ Tx + Need + Pct.Homeless + MCRadjustment + AvgMCDrate, data = df.mediation)
+
+# Perform the mediation analysis
+ mediation_result <- mediate(mediator_model, outcome_model, treat = "Tx", mediator = "CostPerPatient", boot = TRUE, sims = 1000)
+ mediation_result_2 <- mediate(mediator_model_2, outcome_model_2, treat = "Tx", mediator = "Need", boot = TRUE, sims = 1000)
+
+# Summary of the results
+summary(mediation_result)
+summary(mediation_result_2)
+
+
+```
+
+
+
+
+#KOB by hand
+```{r}
+
+
+# Sample data
+set.seed(123)
+data <- data.frame(
+  group = rep(c("A", "B"), each = 100),
+  x1 = rnorm(200),
+  x2 = rnorm(200),
+  y = c(rnorm(100, mean = 5), rnorm(100, mean = 7))
+)
+
+# Fit linear models for each group
+model_A <- lm(y ~ x1 + x2, data = data, subset = (group == "A"))
+model_B <- lm(y ~ x1 + x2, data = data, subset = (group == "B"))
+
+# Extract coefficients and covariance matrices
+coef_A <- coef(model_A)
+coef_B <- coef(model_B)
+vcov_A <- vcov(model_A)
+vcov_B <- vcov(model_B)
+
+# Mean of predictors
+mean_A <- colMeans(data[data$group == "A", c("x1", "x2")])
+mean_B <- colMeans(data[data$group == "B", c("x1", "x2")])
+
+# Decomposition
+explained <- sum((mean_B - mean_A) * coef_A[-1])
+unexplained <- sum(mean_B * (coef_B[-1] - coef_A[-1]))
+
+# Standard errors using delta method
+se_explained <- sqrt(sum((mean_B - mean_A)^2 * diag(vcov_A)[-1]))
+se_unexplained <- sqrt(sum(mean_B^2 * (diag(vcov_A)[-1] + diag(vcov_B)[-1])))
+
+# Results
+cat("Explained difference:", explained, "±", se_explained, "\n")
+cat("Unexplained difference:", unexplained, "±", se_unexplained, "\n")
+
+
+
+
+# Load necessary library
+library(mgcv)
+
+# Sample data
+set.seed(123)
+data <- data.frame(
+  group = runif(200, 0, 1),  # Continuous group variable
+  x1 = rnorm(200),
+  x2 = rnorm(200),
+  y = rnorm(200)
+)
+
+# Fit a varying coefficient model
+model <- gam(y ~ s(group, by = x1) + s(group, by = x2), data = data)
+
+# Summary of the model
+summary(model)
+
+# Predict and plot the results
+pred <- predict(model, newdata = data)
+plot(data$group, pred, main = "Predicted values by continuous group variable")
+
+
+```
+
+
+
+
+
+
+
+
+
+
