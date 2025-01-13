@@ -91,9 +91,9 @@ theme_tufte_revised <- function(base_size = 11, base_family = base_font_family_t
 
 # Read in Data
 ```{r}
-policyfeatures <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "PPSrateFeatures")
-mcradjs <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "MedicareAdjustments") %>% rename(FIPS = `Included FIPS`, MCRadjustment = `2023 FQHC GAF`)
-clinicrates <- read_excel(path = "CHC_PPS_Crosswalk.xlsx", sheet = "PPSRates")
+policyfeatures <- read_excel(path = "/Users/markow/Dropbox/Git/HealthCenterPPS/data/CHC_PPS_Crosswalk.xlsx", sheet = "PPSrateFeatures")
+mcradjs <- read_excel(path = "/Users/markow/Dropbox/Git/HealthCenterPPS/data/CHC_PPS_Crosswalk.xlsx", sheet = "MedicareAdjustments") %>% rename(FIPS = `Included FIPS`, MCRadjustment = `2023 FQHC GAF`)
+clinicrates <- read_excel(path = "/Users/markow/Dropbox/Git/HealthCenterPPS/data/CHC_PPS_Crosswalk.xlsx", sheet = "PPSRates")
 ```
 
 # Filter for New Clinics
