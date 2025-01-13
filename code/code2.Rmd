@@ -762,7 +762,7 @@ library(oaxaca)
 
 #Ratio + Need +  CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + I(MCRadjustment*100) + UrbanRuralFlag + HealthCenterState + FundingCHC + FundingMHC + FundingHO + FundingPH
 
-splits <- 50
+splits <- 51.74
 results <- oaxaca(data = df.fins  %>% 
                     mutate(Split = ifelse(( Pct.NHB + Pct.HL ) >= splits, 1, 
                                                      ifelse(( Pct.NHB + Pct.HL ) <= splits, 0, NA))) %>% 
@@ -832,6 +832,8 @@ df.fins  %>% filter(!is.na(Tribal) | HealthCenterState %in% c("CA","LA"))
 summary(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Need)
 
 ```
+
+
 
 
 
