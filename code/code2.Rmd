@@ -666,6 +666,23 @@ stargazer(model.need1, model.need2, model.need3, type = 'text', omit = c("Health
 
 ```
 
+## Does higher rates incentivize more Mcd patients?
+
+```{r}
+
+summary(lm(data = df.fins, Pct.MCR ~ MCRrate + Need + Intensity + CostPerPatient))
+summary(lm(data = df.fins, Pct.MCD ~ MCDrate + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL  + UrbanRuralFlag))
+
+summary(lm(data = df.fins %>% filter(is.na(Tribal)) %>% mutate(Diff = ifelse(Diff > 305, 305, ifelse(Diff < -236, -236, Diff))), Pct.MCD ~ Diff + Need + Ratio + CostPerPatient + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL  + UrbanRuralFlag))
+
+quantile(df.fins$Diff, probs = c(0.01, 0.99))
+
+
+summary(lm(data = df.fins, Total ~ MCRrate + MCDrate + CostPerPatient))
+
+
+```
+
 
 
 ## IV Investigtation
@@ -948,6 +965,7 @@ df.kob %>%
 
 
 ```
+
 
 
 
