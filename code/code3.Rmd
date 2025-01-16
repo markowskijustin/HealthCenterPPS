@@ -243,6 +243,19 @@ df.longer
 
 # Analysis
 
+
+## Rate to Percent Served
+
+```{r}
+library(quantreg)
+
+rqfit <- rq(Pct.None ~ I(MCDrate/10) + Pct.NHB + Pct.HL + Pct.LessThan100pctFPL + HealthCenterState  + MCRadjustment + UrbanRuralFlag, data = df.fins)
+summary(rqfit)
+summary(rq(data = df.longer, Pct.None ~ I(value/10) + factor(Year) + factor(HealthCenterState) ))
+
+```
+
+
 ## Rate to Percent Served
 ```{r}
 summary(lm(data = df.longer %>% mutate(value = ifelse(value > 300, 300, ifelse(value < 98, 98, value))) %>% filter(Year > 2018), Pct.MCD ~ value + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL  + UrbanRuralFlag + factor(Year) + factor(HealthCenterState) ))
