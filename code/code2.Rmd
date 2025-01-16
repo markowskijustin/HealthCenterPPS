@@ -519,9 +519,9 @@ model2.5 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("OR")),
 
 model3 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
 
-model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag +  Pct.Homeless )
+model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag  )
 
-model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag +  Pct.Homeless)
+model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag )
 
 #stargazer(model1, model2, model2.5, model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
 stargazer(model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
@@ -816,11 +816,11 @@ results <- oaxaca(data = df.fins  %>%
   #   filter(HealthCenterState %notin% c("CA","LA")) %>%
   #   filter(Cut > 0),
   #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.LessThan100pctFPL + Pct.Homeless + Pct.FarmWorker + Pct.MCD + Pct.None + MCRadjustment + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
-  MCDrate ~ AvgMCDrate + CostPerPatient + Need  + Pct.Homeless + MCRadjustment  | Split, R = 1000)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment  | Split, R = 1000)
   #MCDrate ~ AvgMCDrate + CostPerPatient | Split, R = 1000, cluster = df.fins$BHCMISID)
 
 
-plot(results, decomposition = "threefold")
+#plot(results, decomposition = "threefold")
 
 results$y$y.diff
 results$threefold$overall
@@ -864,7 +864,7 @@ library(kableExtra)
 rbind(results$threefold$overall, results$threefold$variables) %>% 
   kable("html", booktabs = T, col.names = c("Covariate","Estimate","SE","Estimate","SE","Estimate","SE")) %>% 
   kable_styling(latex_options = c("striped")) %>%
-  pack_rows(index = c("Overall Impacts" = 1, "Covariates" = 6)) %>% 
+  pack_rows(index = c("Overall Impacts" = 1, "Covariates" = 5)) %>% 
   add_header_above(c( "Covariates" = 1, "Endowments" = 2, "Coefficients" = 2, "Interaction" = 2)) 
 
 
