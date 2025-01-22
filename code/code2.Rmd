@@ -519,9 +519,9 @@ model2.5 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("OR")),
 
 model3 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
 
-model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag  )
+model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag  + Pct.Homeless )
 
-model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag )
+model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag + Pct.Homeless)
 
 #stargazer(model1, model2, model2.5, model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
 stargazer(model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
@@ -816,7 +816,7 @@ results <- oaxaca(data = df.fins  %>%
   #   filter(HealthCenterState %notin% c("CA","LA")) %>%
   #   filter(Cut > 0),
   #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.LessThan100pctFPL + Pct.Homeless + Pct.FarmWorker + Pct.MCD + Pct.None + MCRadjustment + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
-  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment  | Split, R = 1000)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment + Pct.Homeless | Split, R = 1000)
   #MCDrate ~ AvgMCDrate + CostPerPatient | Split, R = 1000, cluster = df.fins$BHCMISID)
 
 
