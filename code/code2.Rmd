@@ -21,6 +21,11 @@ library(ggpattern)
 library(gtsummary)
 library(ivreg)
 
+library(oaxaca)
+
+library(knitr)
+library(kableExtra)
+
 
 `%notin%` <- Negate(`%in%`)
 select <- dplyr::select
@@ -231,9 +236,31 @@ df.geocoded <- df.geocoded %>%
                 ifelse(GrantNumber == "H80CS28973", "45031",  
                 ifelse(GrantNumber == "H80CS00092", "45005",  
                 ifelse(GrantNumber == "H80CS00501", "45025",                       
-                ifelse(GrantNumber == "H80CS00280", "55025",        
+                ifelse(GrantNumber == "H80CS00280", "55025",      
                        
-                       FIPS))))))))))))))))))))))))))))))))))))))))))))
+                ifelse(GrantNumber == "H80CS01444", "02261", 
+                ifelse(GrantNumber == "H80CS47461", "02122", 
+                ifelse(GrantNumber == "H80CS22679", "11001", 
+                ifelse(GrantNumber == "H80CS00549", "24033", 
+                ifelse(GrantNumber == "H80CS00431", "28123", 
+
+                       FIPS))))))))))))))))))))))))))))))))))))))))))))))))) %>% 
+  
+  mutate(FIPS = ifelse(GrantNumber == "H80CS26585", "40041", 
+                ifelse(GrantNumber == "H80CS06453", "40127", 
+                ifelse(GrantNumber == "H80CS00456", "46117", 
+                ifelse(GrantNumber == "H80CS00080", "54097", 
+                ifelse(GrantNumber == "H80CS00254", "54043", 
+                       
+                ifelse(GrantNumber == "H80CS00075", "54019", 
+                ifelse(GrantNumber == "H80CS00337", "54071", 
+                ifelse(GrantNumber == "H80CS18278", "54025", 
+                ifelse(GrantNumber == "H80CS00701", "54047", 
+                ifelse(GrantNumber == "H80CS00614", "54011",                        
+                       
+                ifelse(GrantNumber == "H80CS00827", "54079", 
+                ifelse(GrantNumber == "H80CS30723", "56001",     
+                       FIPS)))))))))))))
 
 
 ```
@@ -519,9 +546,9 @@ model2.5 <- lm(data = df.modeling %>% filter(HealthCenterState %notin% c("OR")),
 
 model3 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag)
 
-model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag  + Pct.Homeless )
+model4 <- lm(data = df.modeling , MCDrate ~ Pct.NHB + Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag  )
 
-model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag + Pct.Homeless)
+model5 <- lm(data = df.modeling , MCDrate ~ Pct.NHB*Pct.HL + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag )
 
 #stargazer(model1, model2, model2.5, model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
 stargazer(model3, model4, model5, type="text", omit = c("HealthCenterState","Constant"))
@@ -715,7 +742,7 @@ mechols.2 <- lm(MCDrate ~  Need + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + P
 mechols.3 <- lm(MCDrate ~  Ratio + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 mechols.4 <- lm(MCDrate ~  CostPerPatient + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 
-mechiv <- ivreg(MCDrate ~   Ratio + Need + CostPerPatient | Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+mechiv <- ivreg(MCDrate ~   Need + CostPerPatient | Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 summary(mechiv)
 
 
@@ -783,8 +810,6 @@ summary(ivreg(MCDrate ~ Need*I(HealthCenterState == "OR") + CostPerPatient | Pct
 
 ```{r}
 
-library(oaxaca)
-
 #Ratio + Need +  CostPerPatient + Pct.NHA + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + I(MCRadjustment*100) + UrbanRuralFlag + HealthCenterState + FundingCHC + FundingMHC + FundingHO + FundingPH
 
 
@@ -816,7 +841,7 @@ results <- oaxaca(data = df.fins  %>%
   #   filter(HealthCenterState %notin% c("CA","LA")) %>%
   #   filter(Cut > 0),
   #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.LessThan100pctFPL + Pct.Homeless + Pct.FarmWorker + Pct.MCD + Pct.None + MCRadjustment + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
-  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment + Pct.Homeless | Split, R = 1000)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment  | Split, R = 1000)
   #MCDrate ~ AvgMCDrate + CostPerPatient | Split, R = 1000, cluster = df.fins$BHCMISID)
 
 
@@ -857,9 +882,6 @@ p <- cbind(rownames(results$threefold$variables), results$threefold$variables) %
 p
 
 
-
-library(knitr)
-library(kableExtra)
 
 rbind(results$threefold$overall, results$threefold$variables) %>% 
   kable("html", booktabs = T, col.names = c("Covariate","Estimate","SE","Estimate","SE","Estimate","SE")) %>% 
@@ -918,7 +940,7 @@ summary(df.fins[df.fins$HealthCenterState %notin% c("CA","LA"),]$Need)
 
 
 
-$$ R = ( \bar{X}_1 - \bar{X}_2 ) \beta_2 + \bar{X}_2 ( \beta_1 - \beta_2 ) + ( \bar{X}_1 - \bar{X}_2 ) ( \beta_1 - \beta_2 ) $$
+$$Y = ( \bar{X}_1 - \bar{X}_2 ) \beta_2 + \bar{X}_2 ( \beta_1 - \beta_2 ) + ( \bar{X}_1 - \bar{X}_2 ) ( \beta_1 - \beta_2 ) $$
 
 1. Endowment Effect (E)
 The endowment effect measures the portion of the outcome difference that is due to differences in the predictors (or endowments) between the two groups. It is calculated as:
