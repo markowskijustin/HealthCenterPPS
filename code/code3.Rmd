@@ -234,7 +234,14 @@ df.longer <- clinicratestimevarying %>%
   mutate(ID = as.numeric(as.factor(BHCMISID))) %>% 
   left_join(coredata, by = c("BHCMISID"))
 
-df.longer
+
+table(df.longer$HealthCenterState)
+
+
+df.longer %>% 
+  group_by(HealthCenterState, Year) %>% 
+  summarise(mean(value)) %>% 
+  filter(HealthCenterState == "NY") 
 
 ```
 
@@ -258,21 +265,63 @@ summary(rq(data = df.longer, Pct.None ~ I(value/10) + factor(Year) + factor(Heal
 
 ## Rate to Percent Served
 ```{r}
-summary(lm(data = df.longer %>% mutate(value = ifelse(value > 300, 300, ifelse(value < 98, 98, value))) %>% filter(Year > 2018), Pct.MCD ~ value + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL  + UrbanRuralFlag + factor(Year) + factor(HealthCenterState) ))
 
-quantile(df.longer$value, probs = 0.025)
-quantile(df.longer$value, probs = 0.975)
+summary(lm(data = df.longer, Pct.MCD ~ value + Pct.NHB + Pct.HL + Pct.NHA + Total + Pct.FarmWorker + Pct.Homeless + Pct.LessThan100pctFPL + factor(Year) + factor(HealthCenterState) ))
 
-ggplot(data = df.longer %>% group_by(Year) %>% summarise(value = mean(Pct.MCD, na.rm = TRUE)), aes(x = Year, y = value)) + 
-  geom_point()
+summary(rq(Pct.MCR ~ I(value/10) + Pct.NHB + Pct.HL + Pct.LessThan100pctFPL + HealthCenterState + UrbanRuralFlag + (Year), data = df.longer))
 
-ggplot(data = df.longer %>% group_by(Year) %>% summarise(value = mean(value, na.rm = TRUE)), aes(x = Year, y = value)) + 
-  geom_point()
+
+
+model <- lm(data = df.longer %>% 
+              filter(HealthCenterState != 'NY') %>% 
+  group_by(GrantNumber) %>% 
+   mutate(Tx = (value - lag(value)) / lag(value) * 10), 
+  Pct.MCD ~ Tx + factor(Year) + factor(HealthCenterState))
+summary(model)
 
 
 ```
 
 
+## did2s
+
+```{r}
+library(did2s)
+
+Mode <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+
+
+df.model <- df.longer %>% filter(HealthCenterState %notin% c("NY")) %>% 
+  group_by(GrantNumber) %>% 
+   mutate(Tx = (value - lag(value)) / lag(value) * 100) 
+
+
+df.model <- left_join(df.model, df.model %>% 
+  group_by(HealthCenterState, Year) %>% 
+  summarise(cut = median(Tx, na.rm = TRUE)), by = c("HealthCenterState","Year")) %>% 
+  mutate(Treatment = ifelse(Tx > cut + 0.1, 1, 0)) %>% 
+  filter(!is.na(Treatment))
+
+
+df.model <- df.model %>% 
+  left_join(cw %>% select(EIN, `Grant Number`), by = c("GrantNumber" = "Grant Number")) %>% 
+  left_join(fins, by = c("EIN","Year" = "form_year")) %>% 
+  left_join(fins.staff, by = c("EIN", "Year")) %>% 
+  mutate(Ratio = ifelse(is.na(Staff) | Staff == 0, NA, log(Total / Staff))) 
+
+
+
+
+model <- lm(data = df.model,Pct.MCD ~ I(value / 10) + factor(Year) + factor(GrantNumber) + Pct.NHB + Pct.HL + Pct.LessThan100pctFPL + UrbanRuralFlag + Pct.ESL)
+coeftest(model, vcov =  vcovCL, cluster = ~GrantNumber)
+summary(model)
+
+
+```
 
 
 
@@ -320,7 +369,7 @@ results.long <- oaxaca(data = df.longer %>%
                                                      ifelse(Pct.NHB + Pct.HL <= 50, 0, NA))) %>% 
                     left_join(df.longer %>% 
   group_by(HealthCenterState, Year) %>% 
-  summarise(AvgMCDrate = mean(value), 
+  summarise(AvgMCDrate = median(value), 
             minMCDrate = min(value), 
             maxMCDrate = max(value)), by = c("HealthCenterState","Year")) %>% 
   left_join(cw %>% select(EIN, `Grant Number`), by = c("GrantNumber" = "Grant Number")) %>% 

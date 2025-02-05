@@ -387,10 +387,10 @@ dim(df.geo[!is.na(df.geo$Diff),])
 
 length(unique(df.geo$HealthCenterState))
 
-df.geo %>% 
-  group_by(HealthCenterState) %>% 
-  summarise(rate = median(MCDrate)) %>% 
-  arrange(rate)
+# df.geo %>% 
+#   group_by(HealthCenterState) %>% 
+#   summarise(rate = median(MCDrate)) %>% 
+#   arrange(rate)
 
 
 nrow(df.geo) - nrow(df.geo.step)
@@ -400,6 +400,9 @@ mean(df.geo[is.na(df.geo$Tribal),]$Diff)
 sd(df.geo[is.na(df.geo$Tribal),]$Diff)
 
 t.test(df.geo$Diff)
+
+#df.geo <- df.geo %>% filter(HealthCenterState != "OR")
+
 ```
 
 
@@ -742,13 +745,13 @@ mechols.2 <- lm(MCDrate ~  Need + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + P
 mechols.3 <- lm(MCDrate ~  Ratio + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 mechols.4 <- lm(MCDrate ~  CostPerPatient + Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 
-mechiv <- ivreg(MCDrate ~   Need + CostPerPatient | Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
+mechiv <- ivreg(MCDrate ~  Ratio +  Need + CostPerPatient | Pct.NHB + Pct.HL + Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins)
 summary(mechiv)
 
 
 
 
-stargazer(mechols.1, mechols.2, mechols.4, mechiv, type = 'text', omit = c("HealthCenterState","Constant"))
+stargazer(mechols.1, mechols.2, mechols.3, mechols.4, mechiv, type = 'text', omit = c("HealthCenterState","Constant"))
 
 
 ```
@@ -793,11 +796,11 @@ mechiv.notOR <- ivreg(MCDrate ~   Pct.NHB + Pct.HL + Need + CostPerPatient | Pct
 stargazer(mechiv.OR, mechiv.notOR, type = 'text', omit = c("HealthCenterState","Constant"))
 
 
-
-
-summary(lm(data = df.fins, MCDrate ~ Need + CostPerPatient*I(HealthCenterState == "OR") + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag))
-
-summary(ivreg(MCDrate ~ Need*I(HealthCenterState == "OR") + CostPerPatient | Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins ))
+# 
+# 
+# summary(lm(data = df.fins, MCDrate ~ Need + CostPerPatient*I(HealthCenterState == "OR") + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag))
+# 
+# summary(ivreg(MCDrate ~ Need*I(HealthCenterState == "OR") + CostPerPatient | Pct.NHA +  Pct.Homeless + Pct.LessThan100pctFPL + Pct.MCD + Pct.MCR + Pct.None + HealthCenterState + I(MCRadjustment*100) + UrbanRuralFlag, data = df.fins ))
 
 
 ```
@@ -815,15 +818,16 @@ summary(ivreg(MCDrate ~ Need*I(HealthCenterState == "OR") + CostPerPatient | Pct
 
 
 
-splits <- median(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("CA","LA","OR"),]$Pct.NHB + df.fins[is.na(df.fins$Tribal)& df.fins$HealthCenterState %notin% c("CA","LA","OR"),]$Pct.HL)
-cuts_Cost <- quantile(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("CA","LA","OR"),]$CostPerPatient, probs = c(0.025, 0.975), na.rm = TRUE)
-cuts_Rate <- quantile(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("CA","LA","OR"),]$MCDrate, probs = c(0.025, 0.975), na.rm = TRUE)
-  
+splits <- median(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("OR"),]$Pct.NHB + df.fins[is.na(df.fins$Tribal)& df.fins$HealthCenterState %notin% c("OR"),]$Pct.HL)
+cuts_Cost <- quantile(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("OR"),]$CostPerPatient, probs = c(0.025, 0.975), na.rm = TRUE)
+cuts_Rate <- quantile(df.fins[is.na(df.fins$Tribal) & df.fins$HealthCenterState %notin% c("OR"),]$MCDrate, probs = c(0.025, 0.975), na.rm = TRUE)
+
+
 results <- oaxaca(data = df.fins  %>% 
                     mutate(Split = ifelse(( Pct.NHB + Pct.HL ) >= splits, 1, 
                                                      ifelse(( Pct.NHB + Pct.HL ) <= splits, 0, NA))) %>% 
                     #filter(is.na(Tribal)) %>% 
-                    filter(is.na(Tribal) & HealthCenterState %notin% c("CA","LA","OR")) %>% 
+                    filter(is.na(Tribal) & HealthCenterState %notin% c("OR")) %>% 
                     mutate(CostPerPatient = ifelse(CostPerPatient > cuts_Cost[2], cuts_Cost[2],
                                                    ifelse(CostPerPatient < cuts_Cost[1], cuts_Cost[1], CostPerPatient))) %>%
                     mutate(MCDrate = ifelse(MCDrate > cuts_Rate[2], cuts_Rate[2],
@@ -841,7 +845,7 @@ results <- oaxaca(data = df.fins  %>%
   #   filter(HealthCenterState %notin% c("CA","LA")) %>%
   #   filter(Cut > 0),
   #MCDrate ~ AvgMCDrate + CostPerPatient + Pct.LessThan100pctFPL + Pct.Homeless + Pct.FarmWorker + Pct.MCD + Pct.None + MCRadjustment + Need | Split, R = 1000, cluster = df.fins$BHCMISID)
-  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment  | Split, R = 1000)
+  MCDrate ~ AvgMCDrate + CostPerPatient + Need + MCRadjustment + Pct.MCD | Split, R = 1000)
   #MCDrate ~ AvgMCDrate + CostPerPatient | Split, R = 1000, cluster = df.fins$BHCMISID)
 
 
@@ -889,6 +893,9 @@ rbind(results$threefold$overall, results$threefold$variables) %>%
   pack_rows(index = c("Overall Impacts" = 1, "Covariates" = 5)) %>% 
   add_header_above(c( "Covariates" = 1, "Endowments" = 2, "Coefficients" = 2, "Interaction" = 2)) 
 
+
+
+ df.fins  %>% filter(!is.na(fs_miscellaneous))
 
 ```
 
